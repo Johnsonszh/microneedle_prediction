@@ -1,0 +1,256 @@
+<html>
+<head>
+<title>microneedle_prediction.py</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #b48ead;}
+.s1 { color: #c0c5ce;}
+.s2 { color: #8fa1b3;}
+.s3 { color: #65737e;}
+.s4 { color: #a3be8c;}
+.s5 { color: #d0876e;}
+.s6 { color: #a3be8c; font-style: italic;}
+.s7 { color: #ab7967;}
+</style>
+</head>
+<body bgcolor="#2b303b">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+microneedle_prediction.py</font>
+</center></td></tr></table>
+<pre><span class="s0">import </span><span class="s1">numpy </span><span class="s0">as </span><span class="s1">np</span>
+<span class="s0">import </span><span class="s1">torch</span>
+<span class="s0">import </span><span class="s1">torch</span><span class="s2">.</span><span class="s1">nn </span><span class="s0">as </span><span class="s1">nn</span>
+<span class="s0">from </span><span class="s1">torch</span><span class="s2">.</span><span class="s1">utils</span><span class="s2">.</span><span class="s1">data </span><span class="s0">import </span><span class="s1">TensorDataset</span><span class="s2">, </span><span class="s1">DataLoader</span>
+<span class="s0">import </span><span class="s1">torch</span><span class="s2">.</span><span class="s1">optim </span><span class="s0">as </span><span class="s1">optim</span>
+<span class="s0">import </span><span class="s1">itertools</span>
+
+<span class="s3"># 定义输入特征和质量评分组件</span>
+<span class="s1">input_features </span><span class="s2">= [</span>
+    <span class="s4">'exposure_time'</span><span class="s2">, </span><span class="s4">'exposure_intensity'</span><span class="s2">, </span><span class="s4">'layer_height'</span><span class="s2">,</span>
+    <span class="s4">'lifting_speed'</span><span class="s2">, </span><span class="s4">'exposure_wait'</span><span class="s2">, </span><span class="s4">'bottom_layers'</span><span class="s2">,</span>
+    <span class="s4">'bottom_exposure_time'</span><span class="s2">, </span><span class="s4">'print_temperature'</span>
+<span class="s2">]</span>
+
+<span class="s1">quality_score_components </span><span class="s2">= [</span>
+    <span class="s4">'needle_definition'</span><span class="s2">, </span><span class="s4">'layer_adhesion'</span><span class="s2">, </span><span class="s4">'needle_height'</span><span class="s2">,</span>
+    <span class="s4">'base_thickness'</span><span class="s2">, </span><span class="s4">'material_curing'</span>
+<span class="s2">]</span>
+
+<span class="s1">quality_score_weights </span><span class="s2">= {</span>
+    <span class="s4">'needle_definition'</span><span class="s2">: </span><span class="s5">0.3</span><span class="s2">,</span>
+    <span class="s4">'layer_adhesion'</span><span class="s2">: </span><span class="s5">0.2</span><span class="s2">,</span>
+    <span class="s4">'needle_height'</span><span class="s2">: </span><span class="s5">0.2</span><span class="s2">,</span>
+    <span class="s4">'base_thickness'</span><span class="s2">: </span><span class="s5">0.15</span><span class="s2">,</span>
+    <span class="s4">'material_curing'</span><span class="s2">: </span><span class="s5">0.15</span>
+<span class="s2">}</span>
+
+
+<span class="s3"># 定义神经网络模型</span>
+<span class="s0">class </span><span class="s1">MicroneedleQualityModel</span><span class="s2">(</span><span class="s1">nn</span><span class="s2">.</span><span class="s1">Module</span><span class="s2">):</span>
+    <span class="s6">&quot;&quot;&quot; 
+    用于预测微针打印质量的前馈神经网络模型 
+    输入:打印参数(input_features) 
+    输出:各项质量评分(quality_score_components) 
+    &quot;&quot;&quot;</span>
+
+    <span class="s0">def </span><span class="s1">__init__</span><span class="s2">(</span><span class="s1">self</span><span class="s2">, </span><span class="s1">num_inputs</span><span class="s2">, </span><span class="s1">num_outputs</span><span class="s2">):</span>
+        <span class="s1">super</span><span class="s2">().</span><span class="s1">__init__</span><span class="s2">()</span>
+        <span class="s3"># 全连接层将输入特征映射到高维空间</span>
+        <span class="s1">self</span><span class="s2">.</span><span class="s1">layer1 </span><span class="s2">= </span><span class="s1">nn</span><span class="s2">.</span><span class="s1">Linear</span><span class="s2">(</span><span class="s1">num_inputs</span><span class="s2">, </span><span class="s5">128</span><span class="s2">)</span>
+        <span class="s1">self</span><span class="s2">.</span><span class="s1">act1 </span><span class="s2">= </span><span class="s1">nn</span><span class="s2">.</span><span class="s1">ReLU</span><span class="s2">()  </span><span class="s3"># ReLU激活引入非线性</span>
+        <span class="s3"># 第二层进一步提取特征之间的复杂关系</span>
+        <span class="s1">self</span><span class="s2">.</span><span class="s1">layer2 </span><span class="s2">= </span><span class="s1">nn</span><span class="s2">.</span><span class="s1">Linear</span><span class="s2">(</span><span class="s5">128</span><span class="s2">, </span><span class="s5">128</span><span class="s2">)</span>
+        <span class="s1">self</span><span class="s2">.</span><span class="s1">act2 </span><span class="s2">= </span><span class="s1">nn</span><span class="s2">.</span><span class="s1">ReLU</span><span class="s2">()</span>
+        <span class="s3"># 第三层逐渐降低特征维度</span>
+        <span class="s1">self</span><span class="s2">.</span><span class="s1">layer3 </span><span class="s2">= </span><span class="s1">nn</span><span class="s2">.</span><span class="s1">Linear</span><span class="s2">(</span><span class="s5">128</span><span class="s2">, </span><span class="s5">64</span><span class="s2">)</span>
+        <span class="s1">self</span><span class="s2">.</span><span class="s1">act3 </span><span class="s2">= </span><span class="s1">nn</span><span class="s2">.</span><span class="s1">ReLU</span><span class="s2">()</span>
+        <span class="s3"># 输出层,每个神经元对应一项质量评分</span>
+        <span class="s1">self</span><span class="s2">.</span><span class="s1">output </span><span class="s2">= </span><span class="s1">nn</span><span class="s2">.</span><span class="s1">Linear</span><span class="s2">(</span><span class="s5">64</span><span class="s2">, </span><span class="s1">num_outputs</span><span class="s2">)</span>
+
+    <span class="s0">def </span><span class="s1">forward</span><span class="s2">(</span><span class="s1">self</span><span class="s2">, </span><span class="s1">x</span><span class="s2">):</span>
+        <span class="s6">&quot;&quot;&quot; 
+        定义数据在神经网络中的传播和转换过程 
+        &quot;&quot;&quot;</span>
+        <span class="s1">x </span><span class="s2">= </span><span class="s1">self</span><span class="s2">.</span><span class="s1">layer1</span><span class="s2">(</span><span class="s1">x</span><span class="s2">)</span>
+        <span class="s1">x </span><span class="s2">= </span><span class="s1">self</span><span class="s2">.</span><span class="s1">act1</span><span class="s2">(</span><span class="s1">x</span><span class="s2">)</span>
+        <span class="s1">x </span><span class="s2">= </span><span class="s1">self</span><span class="s2">.</span><span class="s1">layer2</span><span class="s2">(</span><span class="s1">x</span><span class="s2">)</span>
+        <span class="s1">x </span><span class="s2">= </span><span class="s1">self</span><span class="s2">.</span><span class="s1">act2</span><span class="s2">(</span><span class="s1">x</span><span class="s2">)</span>
+        <span class="s1">x </span><span class="s2">= </span><span class="s1">self</span><span class="s2">.</span><span class="s1">layer3</span><span class="s2">(</span><span class="s1">x</span><span class="s2">)</span>
+        <span class="s1">x </span><span class="s2">= </span><span class="s1">self</span><span class="s2">.</span><span class="s1">act3</span><span class="s2">(</span><span class="s1">x</span><span class="s2">)</span>
+        <span class="s1">x </span><span class="s2">= </span><span class="s1">self</span><span class="s2">.</span><span class="s1">output</span><span class="s2">(</span><span class="s1">x</span><span class="s2">)</span>
+        <span class="s0">return </span><span class="s1">x</span>
+
+
+<span class="s0">def </span><span class="s1">train_model</span><span class="s2">(</span><span class="s1">X_train</span><span class="s2">, </span><span class="s1">y_train</span><span class="s2">, </span><span class="s1">X_val</span><span class="s2">, </span><span class="s1">y_val</span><span class="s2">, </span><span class="s1">num_epochs</span><span class="s2">=</span><span class="s5">500</span><span class="s2">, </span><span class="s1">batch_size</span><span class="s2">=</span><span class="s5">32</span><span class="s2">):</span>
+    <span class="s6">&quot;&quot;&quot; 
+    训练微针质量预测模型 
+    输入: 
+      X_train,y_train:训练数据的输入和输出 
+      X_val,y_val:验证数据的输入和输出 
+      num_epochs:训练轮数 
+      batch_size:批量大小 
+    输出: 
+      训练好的模型 
+    &quot;&quot;&quot;</span>
+    <span class="s3"># 将numpy数组转换为PyTorch的Dataset</span>
+    <span class="s1">train_dataset </span><span class="s2">= </span><span class="s1">TensorDataset</span><span class="s2">(</span><span class="s1">torch</span><span class="s2">.</span><span class="s1">from_numpy</span><span class="s2">(</span><span class="s1">X_train</span><span class="s2">), </span><span class="s1">torch</span><span class="s2">.</span><span class="s1">from_numpy</span><span class="s2">(</span><span class="s1">y_train</span><span class="s2">))</span>
+    <span class="s1">val_dataset </span><span class="s2">= </span><span class="s1">TensorDataset</span><span class="s2">(</span><span class="s1">torch</span><span class="s2">.</span><span class="s1">from_numpy</span><span class="s2">(</span><span class="s1">X_val</span><span class="s2">), </span><span class="s1">torch</span><span class="s2">.</span><span class="s1">from_numpy</span><span class="s2">(</span><span class="s1">y_val</span><span class="s2">))</span>
+
+    <span class="s3"># 将Dataset封装成DataLoader,可按批次遍历</span>
+    <span class="s1">train_loader </span><span class="s2">= </span><span class="s1">DataLoader</span><span class="s2">(</span><span class="s1">train_dataset</span><span class="s2">, </span><span class="s1">batch_size</span><span class="s2">=</span><span class="s1">batch_size</span><span class="s2">, </span><span class="s1">shuffle</span><span class="s2">=</span><span class="s0">True</span><span class="s2">)</span>
+    <span class="s1">val_loader </span><span class="s2">= </span><span class="s1">DataLoader</span><span class="s2">(</span><span class="s1">val_dataset</span><span class="s2">, </span><span class="s1">batch_size</span><span class="s2">=</span><span class="s1">batch_size</span><span class="s2">)</span>
+
+    <span class="s3"># 初始化神经网络模型</span>
+    <span class="s1">model </span><span class="s2">= </span><span class="s1">MicroneedleQualityModel</span><span class="s2">(</span><span class="s1">len</span><span class="s2">(</span><span class="s1">input_features</span><span class="s2">), </span><span class="s1">len</span><span class="s2">(</span><span class="s1">quality_score_components</span><span class="s2">))</span>
+    <span class="s1">criterion </span><span class="s2">= </span><span class="s1">nn</span><span class="s2">.</span><span class="s1">MSELoss</span><span class="s2">()  </span><span class="s3"># 均方误差损失函数</span>
+    <span class="s1">optimizer </span><span class="s2">= </span><span class="s1">optim</span><span class="s2">.</span><span class="s1">Adam</span><span class="s2">(</span><span class="s1">model</span><span class="s2">.</span><span class="s1">parameters</span><span class="s2">())  </span><span class="s3"># Adam优化器</span>
+
+    <span class="s1">best_loss </span><span class="s2">= </span><span class="s1">np</span><span class="s2">.</span><span class="s1">inf  </span><span class="s3"># 初始化最优损失为无穷大</span>
+    <span class="s1">best_epoch </span><span class="s2">= </span><span class="s5">0  </span><span class="s3"># 最优损失对应的轮次</span>
+    <span class="s1">best_model_weights </span><span class="s2">= </span><span class="s0">None  </span><span class="s3"># 最优模型参数</span>
+
+    <span class="s0">for </span><span class="s1">epoch </span><span class="s0">in </span><span class="s1">range</span><span class="s2">(</span><span class="s1">num_epochs</span><span class="s2">):</span>
+        <span class="s3"># 遍历训练数据的迭代器</span>
+        <span class="s0">for </span><span class="s1">inputs</span><span class="s2">, </span><span class="s1">targets </span><span class="s0">in </span><span class="s1">train_loader</span><span class="s2">:</span>
+            <span class="s1">outputs </span><span class="s2">= </span><span class="s1">model</span><span class="s2">(</span><span class="s1">inputs</span><span class="s2">.</span><span class="s1">float</span><span class="s2">())  </span><span class="s3"># 前向传播</span>
+            <span class="s1">loss </span><span class="s2">= </span><span class="s1">criterion</span><span class="s2">(</span><span class="s1">outputs</span><span class="s2">, </span><span class="s1">targets</span><span class="s2">.</span><span class="s1">float</span><span class="s2">())  </span><span class="s3"># 计算损失</span>
+
+            <span class="s1">optimizer</span><span class="s2">.</span><span class="s1">zero_grad</span><span class="s2">()  </span><span class="s3"># 梯度归零</span>
+            <span class="s1">loss</span><span class="s2">.</span><span class="s1">backward</span><span class="s2">()  </span><span class="s3"># 反向传播</span>
+            <span class="s1">optimizer</span><span class="s2">.</span><span class="s1">step</span><span class="s2">()  </span><span class="s3"># 更新权重</span>
+
+        <span class="s3"># 训练结束后,在验证集上评估模型</span>
+        <span class="s0">with </span><span class="s1">torch</span><span class="s2">.</span><span class="s1">no_grad</span><span class="s2">():  </span><span class="s3"># 不计算梯度</span>
+            <span class="s1">val_losses </span><span class="s2">= []</span>
+            <span class="s0">for </span><span class="s1">val_inputs</span><span class="s2">, </span><span class="s1">val_targets </span><span class="s0">in </span><span class="s1">val_loader</span><span class="s2">:</span>
+                <span class="s1">val_outputs </span><span class="s2">= </span><span class="s1">model</span><span class="s2">(</span><span class="s1">val_inputs</span><span class="s2">.</span><span class="s1">float</span><span class="s2">())  </span><span class="s3"># 前向传播</span>
+                <span class="s1">val_loss </span><span class="s2">= </span><span class="s1">criterion</span><span class="s2">(</span><span class="s1">val_outputs</span><span class="s2">, </span><span class="s1">val_targets</span><span class="s2">.</span><span class="s1">float</span><span class="s2">())  </span><span class="s3"># 计算损失</span>
+                <span class="s1">val_losses</span><span class="s2">.</span><span class="s1">append</span><span class="s2">(</span><span class="s1">val_loss</span><span class="s2">.</span><span class="s1">item</span><span class="s2">())</span>
+
+        <span class="s1">current_loss </span><span class="s2">= </span><span class="s1">np</span><span class="s2">.</span><span class="s1">mean</span><span class="s2">(</span><span class="s1">val_losses</span><span class="s2">)  </span><span class="s3"># 计算平均验证损失</span>
+        <span class="s1">print</span><span class="s2">(</span><span class="s4">f&quot;Epoch </span><span class="s7">{</span><span class="s1">epoch </span><span class="s2">+ </span><span class="s5">1</span><span class="s7">}</span><span class="s4">/</span><span class="s7">{</span><span class="s1">num_epochs</span><span class="s7">}</span><span class="s4">, Validation Loss: </span><span class="s7">{</span><span class="s1">current_loss</span><span class="s7">:</span><span class="s4">.4f</span><span class="s7">}</span><span class="s4">&quot;</span><span class="s2">)</span>
+
+        <span class="s0">if </span><span class="s1">current_loss </span><span class="s2">&lt; </span><span class="s1">best_loss</span><span class="s2">:  </span><span class="s3"># 如果当前损失是最优的</span>
+            <span class="s1">best_loss </span><span class="s2">= </span><span class="s1">current_loss  </span><span class="s3"># 更新最优损失</span>
+            <span class="s1">best_epoch </span><span class="s2">= </span><span class="s1">epoch  </span><span class="s3"># 更新最优轮次</span>
+            <span class="s1">best_model_weights </span><span class="s2">= </span><span class="s1">model</span><span class="s2">.</span><span class="s1">state_dict</span><span class="s2">()  </span><span class="s3"># 保存当前的模型参数</span>
+        <span class="s0">else</span><span class="s2">:</span>
+            <span class="s0">if </span><span class="s1">epoch </span><span class="s2">- </span><span class="s1">best_epoch </span><span class="s2">&gt;= </span><span class="s5">20</span><span class="s2">:  </span><span class="s3"># 连续20轮未改善,则早停</span>
+                <span class="s1">print</span><span class="s2">(</span><span class="s4">f&quot;Early stopping at epoch </span><span class="s7">{</span><span class="s1">epoch </span><span class="s2">+ </span><span class="s5">1</span><span class="s7">}</span><span class="s4">&quot;</span><span class="s2">)</span>
+                <span class="s1">model</span><span class="s2">.</span><span class="s1">load_state_dict</span><span class="s2">(</span><span class="s1">best_model_weights</span><span class="s2">)  </span><span class="s3"># 加载之前最优的模型参数</span>
+                <span class="s0">break</span>
+
+    <span class="s0">return </span><span class="s1">model</span>
+
+
+<span class="s0">def </span><span class="s1">predict_quality</span><span class="s2">(</span><span class="s1">model</span><span class="s2">, </span><span class="s1">params</span><span class="s2">):</span>
+    <span class="s6">&quot;&quot;&quot; 
+    用训练好的模型预测给定参数下微针的质量 
+    输入: 
+      model:训练好的PyTorch模型 
+      params:包含input_features中定义的打印参数的字典 
+    输出: 
+      output_dict:预测的quality_score_components中定义的各项质量评分 
+      overall_score:加权求和得到的总体质量评分 
+    &quot;&quot;&quot;</span>
+    <span class="s1">input_vec </span><span class="s2">= </span><span class="s1">np</span><span class="s2">.</span><span class="s1">array</span><span class="s2">([</span><span class="s1">params</span><span class="s2">[</span><span class="s1">f</span><span class="s2">] </span><span class="s0">for </span><span class="s1">f </span><span class="s0">in </span><span class="s1">input_features</span><span class="s2">])  </span><span class="s3"># 提取输入参数</span>
+
+    <span class="s0">with </span><span class="s1">torch</span><span class="s2">.</span><span class="s1">no_grad</span><span class="s2">():  </span><span class="s3"># 预测模式,不跟踪梯度</span>
+        <span class="s1">input_tensor </span><span class="s2">= </span><span class="s1">torch</span><span class="s2">.</span><span class="s1">from_numpy</span><span class="s2">(</span><span class="s1">input_vec</span><span class="s2">.</span><span class="s1">astype</span><span class="s2">(</span><span class="s1">np</span><span class="s2">.</span><span class="s1">float32</span><span class="s2">))  </span><span class="s3"># 转为tensor</span>
+        <span class="s1">output_tensor </span><span class="s2">= </span><span class="s1">model</span><span class="s2">(</span><span class="s1">input_tensor</span><span class="s2">)  </span><span class="s3"># 输入模型得到输出</span>
+
+    <span class="s1">output_vec </span><span class="s2">= </span><span class="s1">output_tensor</span><span class="s2">.</span><span class="s1">numpy</span><span class="s2">()  </span><span class="s3"># 将输出tensor转为numpy数组</span>
+    <span class="s1">output_dict </span><span class="s2">= {</span><span class="s1">comp</span><span class="s2">: </span><span class="s1">output_vec</span><span class="s2">[</span><span class="s1">i</span><span class="s2">] </span><span class="s0">for </span><span class="s1">i</span><span class="s2">, </span><span class="s1">comp </span><span class="s0">in </span><span class="s1">enumerate</span><span class="s2">(</span><span class="s1">quality_score_components</span><span class="s2">)}  </span><span class="s3"># 转为字典</span>
+
+    <span class="s1">overall_score </span><span class="s2">= </span><span class="s1">sum</span><span class="s2">(</span><span class="s1">output_dict</span><span class="s2">[</span><span class="s1">comp</span><span class="s2">] * </span><span class="s1">quality_score_weights</span><span class="s2">[</span><span class="s1">comp</span><span class="s2">]</span>
+                        <span class="s0">for </span><span class="s1">comp </span><span class="s0">in </span><span class="s1">quality_score_components</span><span class="s2">)  </span><span class="s3"># 加权求总分</span>
+
+    <span class="s0">return </span><span class="s1">output_dict</span><span class="s2">, </span><span class="s1">overall_score</span>
+
+
+<span class="s0">def </span><span class="s1">grid_search</span><span class="s2">(</span><span class="s1">model</span><span class="s2">, </span><span class="s1">param_ranges</span><span class="s2">, </span><span class="s1">num_samples</span><span class="s2">=</span><span class="s5">1000</span><span class="s2">):</span>
+    <span class="s6">&quot;&quot;&quot; 
+    对参数空间进行网格搜索,找到质量评分最高的参数组合 
+    输入: 
+      model:训练好的PyTorch模型 
+      param_ranges:dict,key为input_features中的参数名,value为其可取值列表 
+      num_samples:网格搜索的采样点数 
+    输出: 
+      best_params:dict,质量评分最高的参数组合 
+      best_score:float,best_params组合下的总体质量评分 
+    &quot;&quot;&quot;</span>
+    <span class="s1">param_combinations </span><span class="s2">= </span><span class="s1">list</span><span class="s2">(</span><span class="s1">itertools</span><span class="s2">.</span><span class="s1">product</span><span class="s2">(*</span><span class="s1">param_ranges</span><span class="s2">.</span><span class="s1">values</span><span class="s2">()))  </span><span class="s3"># 生成所有参数组合</span>
+
+    <span class="s1">best_params </span><span class="s2">= </span><span class="s0">None</span>
+    <span class="s1">best_score </span><span class="s2">= </span><span class="s5">0</span>
+
+    <span class="s0">for </span><span class="s1">params </span><span class="s0">in </span><span class="s1">param_combinations</span><span class="s2">:</span>
+        <span class="s1">param_dict </span><span class="s2">= {</span><span class="s1">key</span><span class="s2">: </span><span class="s1">value </span><span class="s0">for </span><span class="s1">key</span><span class="s2">, </span><span class="s1">value </span><span class="s0">in </span><span class="s1">zip</span><span class="s2">(</span><span class="s1">param_ranges</span><span class="s2">.</span><span class="s1">keys</span><span class="s2">(), </span><span class="s1">params</span><span class="s2">)}  </span><span class="s3"># 将参数值映射回参数名</span>
+        <span class="s1">_</span><span class="s2">, </span><span class="s1">overall_score </span><span class="s2">= </span><span class="s1">predict_quality</span><span class="s2">(</span><span class="s1">model</span><span class="s2">, </span><span class="s1">param_dict</span><span class="s2">)  </span><span class="s3"># 用当前参数预测质量评分</span>
+
+        <span class="s0">if </span><span class="s1">overall_score </span><span class="s2">&gt; </span><span class="s1">best_score</span><span class="s2">:  </span><span class="s3"># 如果当前组合评分更高,则更新</span>
+            <span class="s1">best_score </span><span class="s2">= </span><span class="s1">overall_score</span>
+            <span class="s1">best_params </span><span class="s2">= </span><span class="s1">param_dict</span>
+
+    <span class="s0">return </span><span class="s1">best_params</span><span class="s2">, </span><span class="s1">best_score</span>
+
+
+<span class="s0">if </span><span class="s1">__name__ </span><span class="s2">== </span><span class="s4">'__main__'</span><span class="s2">:</span>
+    <span class="s3"># 从CSV文件加载训练和验证数据</span>
+    <span class="s1">train_data </span><span class="s2">= </span><span class="s1">np</span><span class="s2">.</span><span class="s1">loadtxt</span><span class="s2">(</span><span class="s4">'.venv/train_data.csv'</span><span class="s2">, </span><span class="s1">delimiter</span><span class="s2">=</span><span class="s4">','</span><span class="s2">, </span><span class="s1">skiprows</span><span class="s2">=</span><span class="s5">1</span><span class="s2">)</span>
+    <span class="s1">val_data </span><span class="s2">= </span><span class="s1">np</span><span class="s2">.</span><span class="s1">loadtxt</span><span class="s2">(</span><span class="s4">'.venv/val_data.csv'</span><span class="s2">, </span><span class="s1">delimiter</span><span class="s2">=</span><span class="s4">','</span><span class="s2">, </span><span class="s1">skiprows</span><span class="s2">=</span><span class="s5">1</span><span class="s2">)</span>
+
+    <span class="s1">X_train </span><span class="s2">= </span><span class="s1">train_data</span><span class="s2">[:, :</span><span class="s1">len</span><span class="s2">(</span><span class="s1">input_features</span><span class="s2">)]  </span><span class="s3"># 前len(input_features)列是输入X</span>
+    <span class="s1">y_train </span><span class="s2">= </span><span class="s1">train_data</span><span class="s2">[:, </span><span class="s1">len</span><span class="s2">(</span><span class="s1">input_features</span><span class="s2">):]  </span><span class="s3"># 剩余列是输出y</span>
+    <span class="s1">X_val </span><span class="s2">= </span><span class="s1">val_data</span><span class="s2">[:, :</span><span class="s1">len</span><span class="s2">(</span><span class="s1">input_features</span><span class="s2">)]</span>
+    <span class="s1">y_val </span><span class="s2">= </span><span class="s1">val_data</span><span class="s2">[:, </span><span class="s1">len</span><span class="s2">(</span><span class="s1">input_features</span><span class="s2">):]</span>
+
+    <span class="s1">model </span><span class="s2">= </span><span class="s1">train_model</span><span class="s2">(</span><span class="s1">X_train</span><span class="s2">, </span><span class="s1">y_train</span><span class="s2">, </span><span class="s1">X_val</span><span class="s2">, </span><span class="s1">y_val</span><span class="s2">)  </span><span class="s3"># 训练模型</span>
+    <span class="s1">torch</span><span class="s2">.</span><span class="s1">save</span><span class="s2">(</span><span class="s1">model</span><span class="s2">.</span><span class="s1">state_dict</span><span class="s2">(), </span><span class="s4">'microneedle_quality_model.pth'</span><span class="s2">)  </span><span class="s3"># 保存模型权重到文件</span>
+
+    <span class="s3"># 定义参数搜索空间</span>
+    <span class="s1">param_ranges </span><span class="s2">= {</span>
+        <span class="s4">'exposure_time'</span><span class="s2">: [</span><span class="s5">3</span><span class="s2">, </span><span class="s5">3.5</span><span class="s2">, </span><span class="s5">4</span><span class="s2">, </span><span class="s5">4.5</span><span class="s2">, </span><span class="s5">5</span><span class="s2">],</span>
+        <span class="s4">'exposure_intensity'</span><span class="s2">: [</span><span class="s5">70</span><span class="s2">, </span><span class="s5">80</span><span class="s2">, </span><span class="s5">90</span><span class="s2">, </span><span class="s5">100</span><span class="s2">],</span>
+        <span class="s4">'layer_height'</span><span class="s2">: [</span><span class="s5">25</span><span class="s2">, </span><span class="s5">50</span><span class="s2">],</span>
+        <span class="s4">'lifting_speed'</span><span class="s2">: [</span><span class="s5">1.5</span><span class="s2">, </span><span class="s5">2</span><span class="s2">, </span><span class="s5">2.5</span><span class="s2">],</span>
+        <span class="s4">'exposure_wait'</span><span class="s2">: [</span><span class="s5">0.2</span><span class="s2">, </span><span class="s5">0.5</span><span class="s2">, </span><span class="s5">0.8</span><span class="s2">],</span>
+        <span class="s4">'bottom_layers'</span><span class="s2">: [</span><span class="s5">3</span><span class="s2">, </span><span class="s5">4</span><span class="s2">, </span><span class="s5">5</span><span class="s2">],</span>
+        <span class="s4">'bottom_exposure_time'</span><span class="s2">: [</span><span class="s5">4</span><span class="s2">, </span><span class="s5">5</span><span class="s2">, </span><span class="s5">6</span><span class="s2">],</span>
+        <span class="s4">'print_temperature'</span><span class="s2">: [</span><span class="s5">22</span><span class="s2">, </span><span class="s5">25</span><span class="s2">, </span><span class="s5">28</span><span class="s2">]</span>
+    <span class="s2">}</span>
+
+    <span class="s3"># 执行网格搜索</span>
+    <span class="s1">best_params</span><span class="s2">, </span><span class="s1">best_score </span><span class="s2">= </span><span class="s1">grid_search</span><span class="s2">(</span><span class="s1">model</span><span class="s2">, </span><span class="s1">param_ranges</span><span class="s2">)</span>
+    <span class="s1">print</span><span class="s2">(</span><span class="s4">f&quot;Best parameters: </span><span class="s7">{</span><span class="s1">best_params</span><span class="s7">}</span><span class="s4">&quot;</span><span class="s2">)</span>
+    <span class="s1">print</span><span class="s2">(</span><span class="s4">f&quot;Best overall quality score: </span><span class="s7">{</span><span class="s1">best_score</span><span class="s7">:</span><span class="s4">.2f</span><span class="s7">}</span><span class="s4">&quot;</span><span class="s2">)</span>
+
+
+    <span class="s0">def </span><span class="s1">input_params</span><span class="s2">():</span>
+        <span class="s6">&quot;&quot;&quot; 
+        从命令行读取用户输入的打印参数值 
+        返回一个字典,key为input_features中定义的参数名,value为用户输入的参数值 
+        &quot;&quot;&quot;</span>
+        <span class="s1">params </span><span class="s2">= {}</span>
+        <span class="s1">print</span><span class="s2">(</span><span class="s4">&quot;Please input the following parameters:&quot;</span><span class="s2">)</span>
+        <span class="s0">for </span><span class="s1">feature </span><span class="s0">in </span><span class="s1">input_features</span><span class="s2">:</span>
+            <span class="s1">value </span><span class="s2">= </span><span class="s1">float</span><span class="s2">(</span><span class="s1">input</span><span class="s2">(</span><span class="s4">f&quot;</span><span class="s7">{</span><span class="s1">feature</span><span class="s7">}</span><span class="s4">: &quot;</span><span class="s2">))  </span><span class="s3"># 提示用户输入每个参数的值</span>
+            <span class="s1">params</span><span class="s2">[</span><span class="s1">feature</span><span class="s2">] = </span><span class="s1">value  </span><span class="s3"># 将参数名和值以键值对的形式存入字典</span>
+        <span class="s0">return </span><span class="s1">params</span>
+
+    <span class="s0">while True</span><span class="s2">:</span>
+        <span class="s1">params </span><span class="s2">= </span><span class="s1">input_params</span><span class="s2">()  </span><span class="s3"># 获取用户输入的参数</span>
+        <span class="s1">component_scores</span><span class="s2">, </span><span class="s1">overall_score </span><span class="s2">= </span><span class="s1">predict_quality</span><span class="s2">(</span><span class="s1">model</span><span class="s2">, </span><span class="s1">params</span><span class="s2">)  </span><span class="s3"># 预测质量</span>
+
+        <span class="s1">print</span><span class="s2">(</span><span class="s4">f&quot;</span><span class="s7">\n</span><span class="s4">Predicted overall quality score: </span><span class="s7">{</span><span class="s1">overall_score</span><span class="s7">:</span><span class="s4">.2f</span><span class="s7">}</span><span class="s4">&quot;</span><span class="s2">)</span>
+        <span class="s1">print</span><span class="s2">(</span><span class="s4">&quot;Component scores:&quot;</span><span class="s2">)</span>
+        <span class="s0">for </span><span class="s1">component</span><span class="s2">, </span><span class="s1">score </span><span class="s0">in </span><span class="s1">component_scores</span><span class="s2">.</span><span class="s1">items</span><span class="s2">():</span>
+            <span class="s1">print</span><span class="s2">(</span><span class="s4">f&quot;</span><span class="s7">{</span><span class="s1">component</span><span class="s7">}</span><span class="s4">: </span><span class="s7">{</span><span class="s1">score</span><span class="s7">:</span><span class="s4">.2f</span><span class="s7">}</span><span class="s4">&quot;</span><span class="s2">)</span>
+
+        <span class="s1">repeat </span><span class="s2">= </span><span class="s1">input</span><span class="s2">(</span><span class="s4">&quot;</span><span class="s7">\n</span><span class="s4">Do you want to predict for another set of parameters? (y/n): &quot;</span><span class="s2">)</span>
+        <span class="s0">if </span><span class="s1">repeat</span><span class="s2">.</span><span class="s1">lower</span><span class="s2">() != </span><span class="s4">'y'</span><span class="s2">:  </span><span class="s3"># 如果用户不再继续,则退出循环</span>
+            <span class="s0">break</span></pre>
+</body>
+</html>

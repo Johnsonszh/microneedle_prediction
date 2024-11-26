@@ -1,0 +1,367 @@
+<html>
+<head>
+<title>microneedle_prediction_2.py</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #b48ead;}
+.s1 { color: #c0c5ce;}
+.s2 { color: #8fa1b3;}
+.s3 { color: #65737e;}
+.s4 { color: #a3be8c;}
+.s5 { color: #d0876e;}
+.s6 { color: #a3be8c; font-style: italic;}
+.s7 { color: #ab7967;}
+</style>
+</head>
+<body bgcolor="#2b303b">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+microneedle_prediction_2.py</font>
+</center></td></tr></table>
+<pre><span class="s0">import </span><span class="s1">numpy </span><span class="s0">as </span><span class="s1">np</span>
+<span class="s0">import </span><span class="s1">torch</span>
+<span class="s0">import </span><span class="s1">torch</span><span class="s2">.</span><span class="s1">nn </span><span class="s0">as </span><span class="s1">nn</span>
+<span class="s0">from </span><span class="s1">torch</span><span class="s2">.</span><span class="s1">utils</span><span class="s2">.</span><span class="s1">data </span><span class="s0">import </span><span class="s1">TensorDataset</span><span class="s2">, </span><span class="s1">DataLoader</span>
+<span class="s0">import </span><span class="s1">torch</span><span class="s2">.</span><span class="s1">optim </span><span class="s0">as </span><span class="s1">optim</span>
+<span class="s0">import </span><span class="s1">json</span>
+<span class="s0">import </span><span class="s1">sys</span>
+
+<span class="s3"># 定义输入特征和质量评分组件</span>
+<span class="s1">input_features </span><span class="s2">= [</span>
+    <span class="s4">'exposure_time'</span><span class="s2">, </span><span class="s4">'exposure_intensity'</span><span class="s2">, </span><span class="s4">'layer_height'</span><span class="s2">,</span>
+    <span class="s4">'lifting_speed'</span><span class="s2">, </span><span class="s4">'exposure_wait'</span><span class="s2">, </span><span class="s4">'bottom_layers'</span><span class="s2">,</span>
+    <span class="s4">'bottom_exposure_time'</span><span class="s2">, </span><span class="s4">'print_temperature'</span>
+<span class="s2">]</span>
+
+<span class="s1">quality_score_components </span><span class="s2">= [</span>
+    <span class="s4">'needle_definition'</span><span class="s2">, </span><span class="s4">'layer_adhesion'</span><span class="s2">, </span><span class="s4">'needle_height'</span><span class="s2">,</span>
+    <span class="s4">'base_thickness'</span><span class="s2">, </span><span class="s4">'material_curing'</span>
+<span class="s2">]</span>
+
+<span class="s1">quality_score_weights </span><span class="s2">= {</span>
+    <span class="s4">'needle_definition'</span><span class="s2">: </span><span class="s5">0.3</span><span class="s2">,</span>
+    <span class="s4">'layer_adhesion'</span><span class="s2">: </span><span class="s5">0.2</span><span class="s2">,</span>
+    <span class="s4">'needle_height'</span><span class="s2">: </span><span class="s5">0.2</span><span class="s2">,</span>
+    <span class="s4">'base_thickness'</span><span class="s2">: </span><span class="s5">0.15</span><span class="s2">,</span>
+    <span class="s4">'material_curing'</span><span class="s2">: </span><span class="s5">0.15</span>
+<span class="s2">}</span>
+
+
+<span class="s0">class </span><span class="s1">MicroneedleQualityModel</span><span class="s2">(</span><span class="s1">nn</span><span class="s2">.</span><span class="s1">Module</span><span class="s2">):</span>
+    <span class="s0">def </span><span class="s1">__init__</span><span class="s2">(</span><span class="s1">self</span><span class="s2">, </span><span class="s1">num_inputs</span><span class="s2">, </span><span class="s1">num_outputs</span><span class="s2">, </span><span class="s1">layer_sizes</span><span class="s2">):</span>
+        <span class="s1">super</span><span class="s2">().</span><span class="s1">__init__</span><span class="s2">()</span>
+        <span class="s1">self</span><span class="s2">.</span><span class="s1">layers </span><span class="s2">= </span><span class="s1">nn</span><span class="s2">.</span><span class="s1">ModuleList</span><span class="s2">()</span>
+
+        <span class="s3"># 输入层</span>
+        <span class="s1">prev_size </span><span class="s2">= </span><span class="s1">num_inputs</span>
+        <span class="s0">for </span><span class="s1">size </span><span class="s0">in </span><span class="s1">layer_sizes</span><span class="s2">:</span>
+            <span class="s1">self</span><span class="s2">.</span><span class="s1">layers</span><span class="s2">.</span><span class="s1">append</span><span class="s2">(</span><span class="s1">nn</span><span class="s2">.</span><span class="s1">Linear</span><span class="s2">(</span><span class="s1">prev_size</span><span class="s2">, </span><span class="s1">size</span><span class="s2">))</span>
+            <span class="s1">self</span><span class="s2">.</span><span class="s1">layers</span><span class="s2">.</span><span class="s1">append</span><span class="s2">(</span><span class="s1">nn</span><span class="s2">.</span><span class="s1">ReLU</span><span class="s2">())</span>
+            <span class="s1">prev_size </span><span class="s2">= </span><span class="s1">size</span>
+
+        <span class="s3"># 输出层</span>
+        <span class="s1">self</span><span class="s2">.</span><span class="s1">layers</span><span class="s2">.</span><span class="s1">append</span><span class="s2">(</span><span class="s1">nn</span><span class="s2">.</span><span class="s1">Linear</span><span class="s2">(</span><span class="s1">prev_size</span><span class="s2">, </span><span class="s1">num_outputs</span><span class="s2">))</span>
+
+    <span class="s0">def </span><span class="s1">forward</span><span class="s2">(</span><span class="s1">self</span><span class="s2">, </span><span class="s1">x</span><span class="s2">):</span>
+        <span class="s0">for </span><span class="s1">layer </span><span class="s0">in </span><span class="s1">self</span><span class="s2">.</span><span class="s1">layers</span><span class="s2">:</span>
+            <span class="s1">x </span><span class="s2">= </span><span class="s1">layer</span><span class="s2">(</span><span class="s1">x</span><span class="s2">)</span>
+        <span class="s0">return </span><span class="s1">x</span>
+
+
+<span class="s0">def </span><span class="s1">safe_input</span><span class="s2">(</span><span class="s1">prompt</span><span class="s2">, </span><span class="s1">default</span><span class="s2">=</span><span class="s0">None</span><span class="s2">):</span>
+    <span class="s6">&quot;&quot;&quot;安全处理用户输入，包含中断处理&quot;&quot;&quot;</span>
+    <span class="s0">try</span><span class="s2">:</span>
+        <span class="s0">return </span><span class="s1">input</span><span class="s2">(</span><span class="s1">prompt</span><span class="s2">)</span>
+    <span class="s0">except </span><span class="s2">(</span><span class="s1">KeyboardInterrupt</span><span class="s2">, </span><span class="s1">EOFError</span><span class="s2">):</span>
+        <span class="s1">print</span><span class="s2">(</span><span class="s4">&quot;</span><span class="s7">\n</span><span class="s4">输入被中断。&quot; </span><span class="s2">+ (</span><span class="s4">&quot;使用默认值。&quot; </span><span class="s0">if </span><span class="s1">default </span><span class="s0">else </span><span class="s4">&quot;退出程序。&quot;</span><span class="s2">))</span>
+        <span class="s0">if </span><span class="s1">default </span><span class="s0">is not None</span><span class="s2">:</span>
+            <span class="s0">return </span><span class="s1">default</span>
+        <span class="s1">sys</span><span class="s2">.</span><span class="s1">exit</span><span class="s2">(</span><span class="s5">0</span><span class="s2">)</span>
+
+
+<span class="s0">def </span><span class="s1">save_model</span><span class="s2">(</span><span class="s1">model</span><span class="s2">: </span><span class="s1">nn</span><span class="s2">.</span><span class="s1">Module</span><span class="s2">, </span><span class="s1">hyperparams</span><span class="s2">: </span><span class="s1">dict</span><span class="s2">, </span><span class="s1">loss</span><span class="s2">: </span><span class="s1">float</span><span class="s2">, </span><span class="s1">filename_prefix</span><span class="s2">: </span><span class="s1">str </span><span class="s2">= </span><span class="s4">'microneedle_quality'</span><span class="s2">) </span><span class="s1">-&gt; </span><span class="s0">None</span><span class="s2">:</span>
+    <span class="s6">&quot;&quot;&quot; 
+    保存模型权重和配置信息。 
+ 
+    参数: 
+        model: 训练好的PyTorch模型 
+        hyperparams: 包含模型超参数的字典 
+        loss: 训练过程中达到的最佳验证损失 
+        filename_prefix: 保存文件的前缀 
+    &quot;&quot;&quot;</span>
+    <span class="s0">try</span><span class="s2">:</span>
+        <span class="s3"># 保存模型权重</span>
+        <span class="s1">model_filename </span><span class="s2">= </span><span class="s4">f'</span><span class="s7">{</span><span class="s1">filename_prefix</span><span class="s7">}</span><span class="s4">_model.pth'</span>
+        <span class="s1">torch</span><span class="s2">.</span><span class="s1">save</span><span class="s2">(</span><span class="s1">model</span><span class="s2">.</span><span class="s1">state_dict</span><span class="s2">(), </span><span class="s1">model_filename</span><span class="s2">)</span>
+
+        <span class="s3"># 保存超参数和训练信息</span>
+        <span class="s1">info </span><span class="s2">= {</span>
+            <span class="s4">'hyperparameters'</span><span class="s2">: </span><span class="s1">hyperparams</span><span class="s2">,</span>
+            <span class="s4">'best_validation_loss'</span><span class="s2">: </span><span class="s1">float</span><span class="s2">(</span><span class="s1">loss</span><span class="s2">),</span>
+            <span class="s4">'input_features'</span><span class="s2">: </span><span class="s1">input_features</span><span class="s2">,</span>
+            <span class="s4">'quality_components'</span><span class="s2">: </span><span class="s1">quality_score_components</span><span class="s2">,</span>
+            <span class="s4">'quality_weights'</span><span class="s2">: </span><span class="s1">quality_score_weights</span>
+        <span class="s2">}</span>
+
+        <span class="s1">info_filename </span><span class="s2">= </span><span class="s4">f'</span><span class="s7">{</span><span class="s1">filename_prefix</span><span class="s7">}</span><span class="s4">_info.json'</span>
+        <span class="s0">with </span><span class="s1">open</span><span class="s2">(</span><span class="s1">info_filename</span><span class="s2">, </span><span class="s4">'w'</span><span class="s2">, </span><span class="s1">encoding</span><span class="s2">=</span><span class="s4">'utf-8'</span><span class="s2">) </span><span class="s0">as </span><span class="s1">f</span><span class="s2">:</span>
+            <span class="s1">json</span><span class="s2">.</span><span class="s1">dump</span><span class="s2">(</span><span class="s1">info</span><span class="s2">, </span><span class="s1">f</span><span class="s2">, </span><span class="s1">indent</span><span class="s2">=</span><span class="s5">4</span><span class="s2">, </span><span class="s1">ensure_ascii</span><span class="s2">=</span><span class="s0">False</span><span class="s2">)</span>
+
+        <span class="s1">print</span><span class="s2">(</span><span class="s4">f&quot;</span><span class="s7">\n</span><span class="s4">模型已保存至 </span><span class="s7">{</span><span class="s1">model_filename</span><span class="s7">}</span><span class="s4">&quot;</span><span class="s2">)</span>
+        <span class="s1">print</span><span class="s2">(</span><span class="s4">f&quot;模型信息已保存至 </span><span class="s7">{</span><span class="s1">info_filename</span><span class="s7">}</span><span class="s4">&quot;</span><span class="s2">)</span>
+
+    <span class="s0">except </span><span class="s1">Exception </span><span class="s0">as </span><span class="s1">e</span><span class="s2">:</span>
+        <span class="s1">print</span><span class="s2">(</span><span class="s4">f&quot;</span><span class="s7">\n</span><span class="s4">错误: 保存模型时出现问题: </span><span class="s7">{</span><span class="s1">str</span><span class="s2">(</span><span class="s1">e</span><span class="s2">)</span><span class="s7">}</span><span class="s4">&quot;</span><span class="s2">)</span>
+
+
+<span class="s0">def </span><span class="s1">get_hyperparameters</span><span class="s2">():</span>
+    <span class="s1">print</span><span class="s2">(</span><span class="s4">&quot;</span><span class="s7">\n</span><span class="s4">请输入模型超参数：&quot;</span><span class="s2">)</span>
+    <span class="s1">print</span><span class="s2">(</span><span class="s4">&quot;（直接按回车使用默认值）&quot;</span><span class="s2">)</span>
+
+    <span class="s0">try</span><span class="s2">:</span>
+        <span class="s3"># 获取层大小</span>
+        <span class="s1">default_layers </span><span class="s2">= [</span><span class="s5">128</span><span class="s2">, </span><span class="s5">128</span><span class="s2">, </span><span class="s5">64</span><span class="s2">]</span>
+        <span class="s1">layer_input </span><span class="s2">= </span><span class="s1">safe_input</span><span class="s2">(</span><span class="s4">f&quot;隐藏层大小（用逗号分隔）[</span><span class="s7">{</span><span class="s4">','</span><span class="s2">.</span><span class="s1">join</span><span class="s2">(</span><span class="s1">map</span><span class="s2">(</span><span class="s1">str</span><span class="s2">, </span><span class="s1">default_layers</span><span class="s2">))</span><span class="s7">}</span><span class="s4">]: &quot;</span><span class="s2">)</span>
+        <span class="s1">layer_sizes </span><span class="s2">= [</span><span class="s1">int</span><span class="s2">(</span><span class="s1">x</span><span class="s2">.</span><span class="s1">strip</span><span class="s2">()) </span><span class="s0">for </span><span class="s1">x </span><span class="s0">in </span><span class="s1">layer_input</span><span class="s2">.</span><span class="s1">split</span><span class="s2">(</span><span class="s4">','</span><span class="s2">)] </span><span class="s0">if </span><span class="s1">layer_input</span><span class="s2">.</span><span class="s1">strip</span><span class="s2">() </span><span class="s0">else </span><span class="s1">default_layers</span>
+
+        <span class="s3"># 获取训练参数</span>
+        <span class="s1">epochs </span><span class="s2">= </span><span class="s1">safe_input</span><span class="s2">(</span><span class="s4">&quot;训练轮数 [500]: &quot;</span><span class="s2">)</span>
+        <span class="s1">epochs </span><span class="s2">= </span><span class="s1">int</span><span class="s2">(</span><span class="s1">epochs</span><span class="s2">) </span><span class="s0">if </span><span class="s1">epochs</span><span class="s2">.</span><span class="s1">strip</span><span class="s2">() </span><span class="s0">else </span><span class="s5">500</span>
+
+        <span class="s1">batch_size </span><span class="s2">= </span><span class="s1">safe_input</span><span class="s2">(</span><span class="s4">&quot;批次大小 [32]: &quot;</span><span class="s2">)</span>
+        <span class="s1">batch_size </span><span class="s2">= </span><span class="s1">int</span><span class="s2">(</span><span class="s1">batch_size</span><span class="s2">) </span><span class="s0">if </span><span class="s1">batch_size</span><span class="s2">.</span><span class="s1">strip</span><span class="s2">() </span><span class="s0">else </span><span class="s5">32</span>
+
+        <span class="s1">learning_rate </span><span class="s2">= </span><span class="s1">safe_input</span><span class="s2">(</span><span class="s4">&quot;学习率 [0.001]: &quot;</span><span class="s2">)</span>
+        <span class="s1">learning_rate </span><span class="s2">= </span><span class="s1">float</span><span class="s2">(</span><span class="s1">learning_rate</span><span class="s2">) </span><span class="s0">if </span><span class="s1">learning_rate</span><span class="s2">.</span><span class="s1">strip</span><span class="s2">() </span><span class="s0">else </span><span class="s5">0.001</span>
+
+        <span class="s1">patience </span><span class="s2">= </span><span class="s1">safe_input</span><span class="s2">(</span><span class="s4">&quot;早停耐心值（轮数）[20]: &quot;</span><span class="s2">)</span>
+        <span class="s1">patience </span><span class="s2">= </span><span class="s1">int</span><span class="s2">(</span><span class="s1">patience</span><span class="s2">) </span><span class="s0">if </span><span class="s1">patience</span><span class="s2">.</span><span class="s1">strip</span><span class="s2">() </span><span class="s0">else </span><span class="s5">20</span>
+
+        <span class="s1">hyperparams </span><span class="s2">= {</span>
+            <span class="s4">'layer_sizes'</span><span class="s2">: </span><span class="s1">layer_sizes</span><span class="s2">,</span>
+            <span class="s4">'epochs'</span><span class="s2">: </span><span class="s1">epochs</span><span class="s2">,</span>
+            <span class="s4">'batch_size'</span><span class="s2">: </span><span class="s1">batch_size</span><span class="s2">,</span>
+            <span class="s4">'learning_rate'</span><span class="s2">: </span><span class="s1">learning_rate</span><span class="s2">,</span>
+            <span class="s4">'patience'</span><span class="s2">: </span><span class="s1">patience</span>
+        <span class="s2">}</span>
+
+        <span class="s1">print</span><span class="s2">(</span><span class="s4">&quot;</span><span class="s7">\n</span><span class="s4">已选择的超参数：&quot;</span><span class="s2">)</span>
+        <span class="s0">for </span><span class="s1">key</span><span class="s2">, </span><span class="s1">value </span><span class="s0">in </span><span class="s1">hyperparams</span><span class="s2">.</span><span class="s1">items</span><span class="s2">():</span>
+            <span class="s1">print</span><span class="s2">(</span><span class="s4">f&quot;</span><span class="s7">{</span><span class="s1">key</span><span class="s7">}</span><span class="s4">: </span><span class="s7">{</span><span class="s1">value</span><span class="s7">}</span><span class="s4">&quot;</span><span class="s2">)</span>
+
+        <span class="s1">confirm </span><span class="s2">= </span><span class="s1">safe_input</span><span class="s2">(</span><span class="s4">&quot;</span><span class="s7">\n</span><span class="s4">使用这些参数继续？(y/n) [y]: &quot;</span><span class="s2">)</span>
+        <span class="s0">if </span><span class="s1">confirm</span><span class="s2">.</span><span class="s1">lower</span><span class="s2">() == </span><span class="s4">'n'</span><span class="s2">:</span>
+            <span class="s0">return </span><span class="s1">get_hyperparameters</span><span class="s2">()</span>
+
+        <span class="s0">return </span><span class="s1">hyperparams</span>
+
+    <span class="s0">except </span><span class="s1">ValueError </span><span class="s0">as </span><span class="s1">e</span><span class="s2">:</span>
+        <span class="s1">print</span><span class="s2">(</span><span class="s4">f&quot;</span><span class="s7">\n</span><span class="s4">参数输入错误: </span><span class="s7">{</span><span class="s1">str</span><span class="s2">(</span><span class="s1">e</span><span class="s2">)</span><span class="s7">}</span><span class="s4">&quot;</span><span class="s2">)</span>
+        <span class="s0">return </span><span class="s1">get_hyperparameters</span><span class="s2">()</span>
+
+
+<span class="s0">def </span><span class="s1">train_model</span><span class="s2">(</span><span class="s1">X_train</span><span class="s2">, </span><span class="s1">y_train</span><span class="s2">, </span><span class="s1">X_val</span><span class="s2">, </span><span class="s1">y_val</span><span class="s2">, </span><span class="s1">hyperparams</span><span class="s2">):</span>
+    <span class="s0">try</span><span class="s2">:</span>
+        <span class="s1">train_dataset </span><span class="s2">= </span><span class="s1">TensorDataset</span><span class="s2">(</span><span class="s1">torch</span><span class="s2">.</span><span class="s1">from_numpy</span><span class="s2">(</span><span class="s1">X_train</span><span class="s2">), </span><span class="s1">torch</span><span class="s2">.</span><span class="s1">from_numpy</span><span class="s2">(</span><span class="s1">y_train</span><span class="s2">))</span>
+        <span class="s1">val_dataset </span><span class="s2">= </span><span class="s1">TensorDataset</span><span class="s2">(</span><span class="s1">torch</span><span class="s2">.</span><span class="s1">from_numpy</span><span class="s2">(</span><span class="s1">X_val</span><span class="s2">), </span><span class="s1">torch</span><span class="s2">.</span><span class="s1">from_numpy</span><span class="s2">(</span><span class="s1">y_val</span><span class="s2">))</span>
+
+        <span class="s1">train_loader </span><span class="s2">= </span><span class="s1">DataLoader</span><span class="s2">(</span><span class="s1">train_dataset</span><span class="s2">, </span><span class="s1">batch_size</span><span class="s2">=</span><span class="s1">hyperparams</span><span class="s2">[</span><span class="s4">'batch_size'</span><span class="s2">], </span><span class="s1">shuffle</span><span class="s2">=</span><span class="s0">True</span><span class="s2">)</span>
+        <span class="s1">val_loader </span><span class="s2">= </span><span class="s1">DataLoader</span><span class="s2">(</span><span class="s1">val_dataset</span><span class="s2">, </span><span class="s1">batch_size</span><span class="s2">=</span><span class="s1">hyperparams</span><span class="s2">[</span><span class="s4">'batch_size'</span><span class="s2">])</span>
+
+        <span class="s1">model </span><span class="s2">= </span><span class="s1">MicroneedleQualityModel</span><span class="s2">(</span><span class="s1">len</span><span class="s2">(</span><span class="s1">input_features</span><span class="s2">), </span><span class="s1">len</span><span class="s2">(</span><span class="s1">quality_score_components</span><span class="s2">),</span>
+                                        <span class="s1">hyperparams</span><span class="s2">[</span><span class="s4">'layer_sizes'</span><span class="s2">])</span>
+        <span class="s1">criterion </span><span class="s2">= </span><span class="s1">nn</span><span class="s2">.</span><span class="s1">MSELoss</span><span class="s2">()</span>
+        <span class="s1">optimizer </span><span class="s2">= </span><span class="s1">optim</span><span class="s2">.</span><span class="s1">Adam</span><span class="s2">(</span><span class="s1">model</span><span class="s2">.</span><span class="s1">parameters</span><span class="s2">(), </span><span class="s1">lr</span><span class="s2">=</span><span class="s1">hyperparams</span><span class="s2">[</span><span class="s4">'learning_rate'</span><span class="s2">])</span>
+
+        <span class="s1">best_loss </span><span class="s2">= </span><span class="s1">np</span><span class="s2">.</span><span class="s1">inf</span>
+        <span class="s1">best_epoch </span><span class="s2">= </span><span class="s5">0</span>
+        <span class="s1">best_model_weights </span><span class="s2">= </span><span class="s0">None</span>
+
+        <span class="s1">print</span><span class="s2">(</span><span class="s4">&quot;</span><span class="s7">\n</span><span class="s4">训练进度：&quot;</span><span class="s2">)</span>
+        <span class="s0">for </span><span class="s1">epoch </span><span class="s0">in </span><span class="s1">range</span><span class="s2">(</span><span class="s1">hyperparams</span><span class="s2">[</span><span class="s4">'epochs'</span><span class="s2">]):</span>
+            <span class="s0">try</span><span class="s2">:</span>
+                <span class="s1">model</span><span class="s2">.</span><span class="s1">train</span><span class="s2">()</span>
+                <span class="s0">for </span><span class="s1">inputs</span><span class="s2">, </span><span class="s1">targets </span><span class="s0">in </span><span class="s1">train_loader</span><span class="s2">:</span>
+                    <span class="s1">outputs </span><span class="s2">= </span><span class="s1">model</span><span class="s2">(</span><span class="s1">inputs</span><span class="s2">.</span><span class="s1">float</span><span class="s2">())</span>
+                    <span class="s1">loss </span><span class="s2">= </span><span class="s1">criterion</span><span class="s2">(</span><span class="s1">outputs</span><span class="s2">, </span><span class="s1">targets</span><span class="s2">.</span><span class="s1">float</span><span class="s2">())</span>
+
+                    <span class="s1">optimizer</span><span class="s2">.</span><span class="s1">zero_grad</span><span class="s2">()</span>
+                    <span class="s1">loss</span><span class="s2">.</span><span class="s1">backward</span><span class="s2">()</span>
+                    <span class="s1">optimizer</span><span class="s2">.</span><span class="s1">step</span><span class="s2">()</span>
+
+                <span class="s1">model</span><span class="s2">.</span><span class="s1">eval</span><span class="s2">()</span>
+                <span class="s0">with </span><span class="s1">torch</span><span class="s2">.</span><span class="s1">no_grad</span><span class="s2">():</span>
+                    <span class="s1">val_losses </span><span class="s2">= []</span>
+                    <span class="s0">for </span><span class="s1">val_inputs</span><span class="s2">, </span><span class="s1">val_targets </span><span class="s0">in </span><span class="s1">val_loader</span><span class="s2">:</span>
+                        <span class="s1">val_outputs </span><span class="s2">= </span><span class="s1">model</span><span class="s2">(</span><span class="s1">val_inputs</span><span class="s2">.</span><span class="s1">float</span><span class="s2">())</span>
+                        <span class="s1">val_loss </span><span class="s2">= </span><span class="s1">criterion</span><span class="s2">(</span><span class="s1">val_outputs</span><span class="s2">, </span><span class="s1">val_targets</span><span class="s2">.</span><span class="s1">float</span><span class="s2">())</span>
+                        <span class="s1">val_losses</span><span class="s2">.</span><span class="s1">append</span><span class="s2">(</span><span class="s1">val_loss</span><span class="s2">.</span><span class="s1">item</span><span class="s2">())</span>
+
+                <span class="s1">current_loss </span><span class="s2">= </span><span class="s1">np</span><span class="s2">.</span><span class="s1">mean</span><span class="s2">(</span><span class="s1">val_losses</span><span class="s2">)</span>
+                <span class="s0">if </span><span class="s2">(</span><span class="s1">epoch </span><span class="s2">+ </span><span class="s5">1</span><span class="s2">) % </span><span class="s5">50 </span><span class="s2">== </span><span class="s5">0</span><span class="s2">:</span>
+                    <span class="s1">print</span><span class="s2">(</span><span class="s4">f&quot;轮次 </span><span class="s7">{</span><span class="s1">epoch </span><span class="s2">+ </span><span class="s5">1</span><span class="s7">}</span><span class="s4">/</span><span class="s7">{</span><span class="s1">hyperparams</span><span class="s2">[</span><span class="s4">'epochs'</span><span class="s2">]</span><span class="s7">}</span><span class="s4">, 验证损失: </span><span class="s7">{</span><span class="s1">current_loss</span><span class="s7">:</span><span class="s4">.4f</span><span class="s7">}</span><span class="s4">&quot;</span><span class="s2">)</span>
+
+                <span class="s0">if </span><span class="s1">current_loss </span><span class="s2">&lt; </span><span class="s1">best_loss</span><span class="s2">:</span>
+                    <span class="s1">best_loss </span><span class="s2">= </span><span class="s1">current_loss</span>
+                    <span class="s1">best_epoch </span><span class="s2">= </span><span class="s1">epoch</span>
+                    <span class="s1">best_model_weights </span><span class="s2">= </span><span class="s1">model</span><span class="s2">.</span><span class="s1">state_dict</span><span class="s2">()</span>
+                <span class="s0">elif </span><span class="s1">epoch </span><span class="s2">- </span><span class="s1">best_epoch </span><span class="s2">&gt;= </span><span class="s1">hyperparams</span><span class="s2">[</span><span class="s4">'patience'</span><span class="s2">]:</span>
+                    <span class="s1">print</span><span class="s2">(</span><span class="s4">f&quot;</span><span class="s7">\n</span><span class="s4">在轮次 </span><span class="s7">{</span><span class="s1">epoch </span><span class="s2">+ </span><span class="s5">1</span><span class="s7">} </span><span class="s4">处提前停止&quot;</span><span class="s2">)</span>
+                    <span class="s1">print</span><span class="s2">(</span><span class="s4">f&quot;最佳验证损失: </span><span class="s7">{</span><span class="s1">best_loss</span><span class="s7">:</span><span class="s4">.4f</span><span class="s7">} </span><span class="s4">(轮次 </span><span class="s7">{</span><span class="s1">best_epoch </span><span class="s2">+ </span><span class="s5">1</span><span class="s7">}</span><span class="s4">)&quot;</span><span class="s2">)</span>
+                    <span class="s1">model</span><span class="s2">.</span><span class="s1">load_state_dict</span><span class="s2">(</span><span class="s1">best_model_weights</span><span class="s2">)</span>
+                    <span class="s0">break</span>
+
+            <span class="s0">except </span><span class="s1">KeyboardInterrupt</span><span class="s2">:</span>
+                <span class="s1">print</span><span class="s2">(</span><span class="s4">&quot;</span><span class="s7">\n</span><span class="s4">训练被中断。保存当前最佳模型...&quot;</span><span class="s2">)</span>
+                <span class="s0">if </span><span class="s1">best_model_weights </span><span class="s0">is not None</span><span class="s2">:</span>
+                    <span class="s1">model</span><span class="s2">.</span><span class="s1">load_state_dict</span><span class="s2">(</span><span class="s1">best_model_weights</span><span class="s2">)</span>
+                <span class="s0">break</span>
+
+        <span class="s0">return </span><span class="s1">model</span><span class="s2">, </span><span class="s1">best_loss</span>
+
+    <span class="s0">except </span><span class="s1">Exception </span><span class="s0">as </span><span class="s1">e</span><span class="s2">:</span>
+        <span class="s1">print</span><span class="s2">(</span><span class="s4">f&quot;</span><span class="s7">\n</span><span class="s4">训练过程中出错: </span><span class="s7">{</span><span class="s1">str</span><span class="s2">(</span><span class="s1">e</span><span class="s2">)</span><span class="s7">}</span><span class="s4">&quot;</span><span class="s2">)</span>
+        <span class="s0">raise</span>
+
+
+<span class="s0">def </span><span class="s1">predict_quality</span><span class="s2">(</span><span class="s1">model</span><span class="s2">, </span><span class="s1">params</span><span class="s2">):</span>
+    <span class="s1">model</span><span class="s2">.</span><span class="s1">eval</span><span class="s2">()</span>
+    <span class="s0">try</span><span class="s2">:</span>
+        <span class="s1">input_vec </span><span class="s2">= </span><span class="s1">np</span><span class="s2">.</span><span class="s1">array</span><span class="s2">([</span><span class="s1">params</span><span class="s2">[</span><span class="s1">f</span><span class="s2">] </span><span class="s0">for </span><span class="s1">f </span><span class="s0">in </span><span class="s1">input_features</span><span class="s2">])</span>
+
+        <span class="s0">with </span><span class="s1">torch</span><span class="s2">.</span><span class="s1">no_grad</span><span class="s2">():</span>
+            <span class="s1">input_tensor </span><span class="s2">= </span><span class="s1">torch</span><span class="s2">.</span><span class="s1">from_numpy</span><span class="s2">(</span><span class="s1">input_vec</span><span class="s2">.</span><span class="s1">astype</span><span class="s2">(</span><span class="s1">np</span><span class="s2">.</span><span class="s1">float32</span><span class="s2">))</span>
+            <span class="s1">output_tensor </span><span class="s2">= </span><span class="s1">model</span><span class="s2">(</span><span class="s1">input_tensor</span><span class="s2">)</span>
+
+        <span class="s1">output_vec </span><span class="s2">= </span><span class="s1">output_tensor</span><span class="s2">.</span><span class="s1">numpy</span><span class="s2">()</span>
+        <span class="s1">output_dict </span><span class="s2">= {</span><span class="s1">comp</span><span class="s2">: </span><span class="s1">output_vec</span><span class="s2">[</span><span class="s1">i</span><span class="s2">] </span><span class="s0">for </span><span class="s1">i</span><span class="s2">, </span><span class="s1">comp </span><span class="s0">in </span><span class="s1">enumerate</span><span class="s2">(</span><span class="s1">quality_score_components</span><span class="s2">)}</span>
+
+        <span class="s1">overall_score </span><span class="s2">= </span><span class="s1">sum</span><span class="s2">(</span><span class="s1">output_dict</span><span class="s2">[</span><span class="s1">comp</span><span class="s2">] * </span><span class="s1">quality_score_weights</span><span class="s2">[</span><span class="s1">comp</span><span class="s2">]</span>
+                            <span class="s0">for </span><span class="s1">comp </span><span class="s0">in </span><span class="s1">quality_score_components</span><span class="s2">)</span>
+
+        <span class="s0">return </span><span class="s1">output_dict</span><span class="s2">, </span><span class="s1">overall_score</span>
+
+    <span class="s0">except </span><span class="s1">Exception </span><span class="s0">as </span><span class="s1">e</span><span class="s2">:</span>
+        <span class="s1">print</span><span class="s2">(</span><span class="s4">f&quot;</span><span class="s7">\n</span><span class="s4">预测过程中出错: </span><span class="s7">{</span><span class="s1">str</span><span class="s2">(</span><span class="s1">e</span><span class="s2">)</span><span class="s7">}</span><span class="s4">&quot;</span><span class="s2">)</span>
+        <span class="s0">raise</span>
+
+
+<span class="s0">def </span><span class="s1">input_params</span><span class="s2">():</span>
+    <span class="s1">params </span><span class="s2">= {}</span>
+    <span class="s1">print</span><span class="s2">(</span><span class="s4">&quot;</span><span class="s7">\n</span><span class="s4">请输入以下参数：&quot;</span><span class="s2">)</span>
+    <span class="s0">for </span><span class="s1">feature </span><span class="s0">in </span><span class="s1">input_features</span><span class="s2">:</span>
+        <span class="s0">while True</span><span class="s2">:</span>
+            <span class="s0">try</span><span class="s2">:</span>
+                <span class="s1">value_str </span><span class="s2">= </span><span class="s1">safe_input</span><span class="s2">(</span><span class="s4">f&quot;</span><span class="s7">{</span><span class="s1">feature</span><span class="s7">}</span><span class="s4">: &quot;</span><span class="s2">)</span>
+                <span class="s1">value </span><span class="s2">= </span><span class="s1">float</span><span class="s2">(</span><span class="s1">value_str</span><span class="s2">)</span>
+                <span class="s1">params</span><span class="s2">[</span><span class="s1">feature</span><span class="s2">] = </span><span class="s1">value</span>
+                <span class="s0">break</span>
+            <span class="s0">except </span><span class="s1">ValueError</span><span class="s2">:</span>
+                <span class="s1">print</span><span class="s2">(</span><span class="s4">&quot;请输入有效的数字&quot;</span><span class="s2">)</span>
+    <span class="s0">return </span><span class="s1">params</span>
+
+
+<span class="s0">def </span><span class="s1">run_prediction_loop</span><span class="s2">(</span><span class="s1">model</span><span class="s2">):</span>
+    <span class="s0">while True</span><span class="s2">:</span>
+        <span class="s0">try</span><span class="s2">:</span>
+            <span class="s1">params </span><span class="s2">= </span><span class="s1">input_params</span><span class="s2">()</span>
+            <span class="s1">component_scores</span><span class="s2">, </span><span class="s1">overall_score </span><span class="s2">= </span><span class="s1">predict_quality</span><span class="s2">(</span><span class="s1">model</span><span class="s2">, </span><span class="s1">params</span><span class="s2">)</span>
+
+            <span class="s1">print</span><span class="s2">(</span><span class="s4">f&quot;</span><span class="s7">\n</span><span class="s4">预测的总体质量分数: </span><span class="s7">{</span><span class="s1">overall_score</span><span class="s7">:</span><span class="s4">.2f</span><span class="s7">}</span><span class="s4">&quot;</span><span class="s2">)</span>
+            <span class="s1">print</span><span class="s2">(</span><span class="s4">&quot;各组件分数：&quot;</span><span class="s2">)</span>
+            <span class="s0">for </span><span class="s1">component</span><span class="s2">, </span><span class="s1">score </span><span class="s0">in </span><span class="s1">component_scores</span><span class="s2">.</span><span class="s1">items</span><span class="s2">():</span>
+                <span class="s1">print</span><span class="s2">(</span><span class="s4">f&quot;</span><span class="s7">{</span><span class="s1">component</span><span class="s7">}</span><span class="s4">: </span><span class="s7">{</span><span class="s1">score</span><span class="s7">:</span><span class="s4">.2f</span><span class="s7">}</span><span class="s4">&quot;</span><span class="s2">)</span>
+
+            <span class="s1">repeat </span><span class="s2">= </span><span class="s1">safe_input</span><span class="s2">(</span><span class="s4">&quot;</span><span class="s7">\n</span><span class="s4">是否继续预测？(y/n) [y]: &quot;</span><span class="s2">)</span>
+            <span class="s0">if </span><span class="s1">repeat</span><span class="s2">.</span><span class="s1">lower</span><span class="s2">() == </span><span class="s4">'n'</span><span class="s2">:</span>
+                <span class="s0">break</span>
+
+        <span class="s0">except </span><span class="s1">Exception </span><span class="s0">as </span><span class="s1">e</span><span class="s2">:</span>
+            <span class="s1">print</span><span class="s2">(</span><span class="s4">f&quot;</span><span class="s7">\n</span><span class="s4">预测过程中出错: </span><span class="s7">{</span><span class="s1">str</span><span class="s2">(</span><span class="s1">e</span><span class="s2">)</span><span class="s7">}</span><span class="s4">&quot;</span><span class="s2">)</span>
+            <span class="s1">retry </span><span class="s2">= </span><span class="s1">safe_input</span><span class="s2">(</span><span class="s4">&quot;是否重试？(y/n) [y]: &quot;</span><span class="s2">)</span>
+            <span class="s0">if </span><span class="s1">retry</span><span class="s2">.</span><span class="s1">lower</span><span class="s2">() == </span><span class="s4">'n'</span><span class="s2">:</span>
+                <span class="s0">break</span>
+
+
+<span class="s0">def </span><span class="s1">main</span><span class="s2">():</span>
+    <span class="s0">while True</span><span class="s2">:</span>
+        <span class="s0">try</span><span class="s2">:</span>
+            <span class="s1">print</span><span class="s2">(</span><span class="s4">&quot;</span><span class="s7">\n</span><span class="s4">=== 微针质量预测系统 ===&quot;</span><span class="s2">)</span>
+            <span class="s1">print</span><span class="s2">(</span><span class="s4">&quot;1. 训练新模型&quot;</span><span class="s2">)</span>
+            <span class="s1">print</span><span class="s2">(</span><span class="s4">&quot;2. 使用现有模型进行预测&quot;</span><span class="s2">)</span>
+            <span class="s1">print</span><span class="s2">(</span><span class="s4">&quot;3. 退出&quot;</span><span class="s2">)</span>
+
+            <span class="s1">choice </span><span class="s2">= </span><span class="s1">safe_input</span><span class="s2">(</span><span class="s4">&quot;</span><span class="s7">\n</span><span class="s4">请选择操作 [1/2/3]: &quot;</span><span class="s2">)</span>
+
+            <span class="s0">if </span><span class="s1">choice </span><span class="s2">== </span><span class="s4">&quot;1&quot;</span><span class="s2">:</span>
+                <span class="s1">print</span><span class="s2">(</span><span class="s4">&quot;</span><span class="s7">\n</span><span class="s4">加载训练数据...&quot;</span><span class="s2">)</span>
+                <span class="s0">try</span><span class="s2">:</span>
+                    <span class="s1">train_data </span><span class="s2">= </span><span class="s1">np</span><span class="s2">.</span><span class="s1">loadtxt</span><span class="s2">(</span><span class="s4">'.venv/train_data.csv'</span><span class="s2">, </span><span class="s1">delimiter</span><span class="s2">=</span><span class="s4">','</span><span class="s2">, </span><span class="s1">skiprows</span><span class="s2">=</span><span class="s5">1</span><span class="s2">)</span>
+                    <span class="s1">val_data </span><span class="s2">= </span><span class="s1">np</span><span class="s2">.</span><span class="s1">loadtxt</span><span class="s2">(</span><span class="s4">'.venv/val_data.csv'</span><span class="s2">, </span><span class="s1">delimiter</span><span class="s2">=</span><span class="s4">','</span><span class="s2">, </span><span class="s1">skiprows</span><span class="s2">=</span><span class="s5">1</span><span class="s2">)</span>
+
+                    <span class="s1">X_train </span><span class="s2">= </span><span class="s1">train_data</span><span class="s2">[:, :</span><span class="s1">len</span><span class="s2">(</span><span class="s1">input_features</span><span class="s2">)]</span>
+                    <span class="s1">y_train </span><span class="s2">= </span><span class="s1">train_data</span><span class="s2">[:, </span><span class="s1">len</span><span class="s2">(</span><span class="s1">input_features</span><span class="s2">):]</span>
+                    <span class="s1">X_val </span><span class="s2">= </span><span class="s1">val_data</span><span class="s2">[:, :</span><span class="s1">len</span><span class="s2">(</span><span class="s1">input_features</span><span class="s2">)]</span>
+                    <span class="s1">y_val </span><span class="s2">= </span><span class="s1">val_data</span><span class="s2">[:, </span><span class="s1">len</span><span class="s2">(</span><span class="s1">input_features</span><span class="s2">):]</span>
+
+                    <span class="s1">print</span><span class="s2">(</span><span class="s4">&quot;数据加载成功！&quot;</span><span class="s2">)</span>
+
+                    <span class="s1">hyperparams </span><span class="s2">= </span><span class="s1">get_hyperparameters</span><span class="s2">()</span>
+
+                    <span class="s1">print</span><span class="s2">(</span><span class="s4">&quot;</span><span class="s7">\n</span><span class="s4">开始训练模型...&quot;</span><span class="s2">)</span>
+                    <span class="s1">model</span><span class="s2">, </span><span class="s1">best_loss </span><span class="s2">= </span><span class="s1">train_model</span><span class="s2">(</span><span class="s1">X_train</span><span class="s2">, </span><span class="s1">y_train</span><span class="s2">, </span><span class="s1">X_val</span><span class="s2">, </span><span class="s1">y_val</span><span class="s2">, </span><span class="s1">hyperparams</span><span class="s2">)</span>
+
+                    <span class="s1">save_model</span><span class="s2">(</span><span class="s1">model</span><span class="s2">, </span><span class="s1">hyperparams</span><span class="s2">, </span><span class="s1">best_loss</span><span class="s2">)</span>
+                    <span class="s1">print</span><span class="s2">(</span><span class="s4">&quot;</span><span class="s7">\n</span><span class="s4">模型训练完成！&quot;</span><span class="s2">)</span>
+
+                <span class="s0">except </span><span class="s1">FileNotFoundError</span><span class="s2">:</span>
+                    <span class="s1">print</span><span class="s2">(</span><span class="s4">&quot;</span><span class="s7">\n</span><span class="s4">错误：未找到训练数据文件。请确保 train_data.csv 和 val_data.csv 文件存在。&quot;</span><span class="s2">)</span>
+                    <span class="s0">continue</span>
+
+            <span class="s0">elif </span><span class="s1">choice </span><span class="s2">== </span><span class="s4">&quot;2&quot;</span><span class="s2">:</span>
+                <span class="s0">try</span><span class="s2">:</span>
+                    <span class="s0">with </span><span class="s1">open</span><span class="s2">(</span><span class="s4">'microneedle_quality_info.json'</span><span class="s2">, </span><span class="s4">'r'</span><span class="s2">, </span><span class="s1">encoding</span><span class="s2">=</span><span class="s4">'utf-8'</span><span class="s2">) </span><span class="s0">as </span><span class="s1">f</span><span class="s2">:</span>
+                        <span class="s1">model_info </span><span class="s2">= </span><span class="s1">json</span><span class="s2">.</span><span class="s1">load</span><span class="s2">(</span><span class="s1">f</span><span class="s2">)</span>
+
+                    <span class="s1">model </span><span class="s2">= </span><span class="s1">MicroneedleQualityModel</span><span class="s2">(</span>
+                        <span class="s1">len</span><span class="s2">(</span><span class="s1">input_features</span><span class="s2">),</span>
+                        <span class="s1">len</span><span class="s2">(</span><span class="s1">quality_score_components</span><span class="s2">),</span>
+                        <span class="s1">model_info</span><span class="s2">[</span><span class="s4">'hyperparameters'</span><span class="s2">][</span><span class="s4">'layer_sizes'</span><span class="s2">]</span>
+                    <span class="s2">)</span>
+
+                    <span class="s1">model</span><span class="s2">.</span><span class="s1">load_state_dict</span><span class="s2">(</span><span class="s1">torch</span><span class="s2">.</span><span class="s1">load</span><span class="s2">(</span><span class="s4">'microneedle_quality_model.pth'</span><span class="s2">))</span>
+                    <span class="s1">model</span><span class="s2">.</span><span class="s1">eval</span><span class="s2">()</span>
+                    <span class="s1">print</span><span class="s2">(</span><span class="s4">&quot;</span><span class="s7">\n</span><span class="s4">模型加载成功！&quot;</span><span class="s2">)</span>
+
+                    <span class="s1">run_prediction_loop</span><span class="s2">(</span><span class="s1">model</span><span class="s2">)</span>
+
+                <span class="s0">except </span><span class="s1">FileNotFoundError</span><span class="s2">:</span>
+                    <span class="s1">print</span><span class="s2">(</span><span class="s4">&quot;</span><span class="s7">\n</span><span class="s4">错误：未找到模型文件。请先训练模型。&quot;</span><span class="s2">)</span>
+                    <span class="s0">continue</span>
+
+            <span class="s0">elif </span><span class="s1">choice </span><span class="s2">== </span><span class="s4">&quot;3&quot;</span><span class="s2">:</span>
+                <span class="s1">print</span><span class="s2">(</span><span class="s4">&quot;</span><span class="s7">\n</span><span class="s4">感谢使用！再见！&quot;</span><span class="s2">)</span>
+                <span class="s0">break</span>
+
+            <span class="s0">else</span><span class="s2">:</span>
+                <span class="s1">print</span><span class="s2">(</span><span class="s4">&quot;</span><span class="s7">\n</span><span class="s4">无效的选择，请重试。&quot;</span><span class="s2">)</span>
+
+        <span class="s0">except </span><span class="s1">Exception </span><span class="s0">as </span><span class="s1">e</span><span class="s2">:</span>
+            <span class="s1">print</span><span class="s2">(</span><span class="s4">f&quot;</span><span class="s7">\n</span><span class="s4">发生意外错误: </span><span class="s7">{</span><span class="s1">str</span><span class="s2">(</span><span class="s1">e</span><span class="s2">)</span><span class="s7">}</span><span class="s4">&quot;</span><span class="s2">)</span>
+            <span class="s1">retry </span><span class="s2">= </span><span class="s1">safe_input</span><span class="s2">(</span><span class="s4">&quot;是否继续？(y/n) [y]: &quot;</span><span class="s2">)</span>
+            <span class="s0">if </span><span class="s1">retry</span><span class="s2">.</span><span class="s1">lower</span><span class="s2">() == </span><span class="s4">'n'</span><span class="s2">:</span>
+                <span class="s0">break</span>
+
+
+<span class="s0">if </span><span class="s1">__name__ </span><span class="s2">== </span><span class="s4">'__main__'</span><span class="s2">:</span>
+    <span class="s0">try</span><span class="s2">:</span>
+        <span class="s1">main</span><span class="s2">()</span>
+    <span class="s0">except </span><span class="s1">KeyboardInterrupt</span><span class="s2">:</span>
+        <span class="s1">print</span><span class="s2">(</span><span class="s4">&quot;</span><span class="s7">\n</span><span class="s4">程序被用户中断。正在退出...&quot;</span><span class="s2">)</span>
+    <span class="s0">except </span><span class="s1">Exception </span><span class="s0">as </span><span class="s1">e</span><span class="s2">:</span>
+        <span class="s1">print</span><span class="s2">(</span><span class="s4">f&quot;</span><span class="s7">\n</span><span class="s4">严重错误: </span><span class="s7">{</span><span class="s1">str</span><span class="s2">(</span><span class="s1">e</span><span class="s2">)</span><span class="s7">}</span><span class="s4">&quot;</span><span class="s2">)</span>
+    <span class="s0">finally</span><span class="s2">:</span>
+        <span class="s1">print</span><span class="s2">(</span><span class="s4">&quot;</span><span class="s7">\n</span><span class="s4">程序已终止。&quot;</span><span class="s2">)</span></pre>
+</body>
+</html>

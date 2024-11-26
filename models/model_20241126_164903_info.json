@@ -1,0 +1,96 @@
+{
+    "hyperparameters": {
+        "layer_sizes": [
+            128,
+            128,
+            64
+        ],
+        "epochs": 500,
+        "batch_size": 32,
+        "learning_rate": 0.001,
+        "patience": 20
+    },
+    "best_validation_loss": 8.009789511477932,
+    "input_features": [
+        "layer_height",
+        "exposure_time",
+        "exposure_intensity",
+        "bottom_layers",
+        "bottom_exposure_intensity",
+        "lifting_speed",
+        "exposure_wait",
+        "liquid_speed",
+        "bottom_exposure_time",
+        "print_mode"
+    ],
+    "quality_components": [
+        "needle_definition",
+        "layer_adhesion",
+        "needle_height",
+        "base_thickness",
+        "material_curing"
+    ],
+    "quality_weights": {
+        "needle_definition": 0.3,
+        "layer_adhesion": 0.2,
+        "needle_height": 0.2,
+        "base_thickness": 0.15,
+        "material_curing": 0.15
+    },
+    "param_ranges": {
+        "layer_height": [
+            0.01,
+            0.1,
+            0.01
+        ],
+        "exposure_time": [
+            1.0,
+            10.0,
+            0.5
+        ],
+        "exposure_intensity": [
+            50,
+            100,
+            5
+        ],
+        "bottom_layers": [
+            3,
+            8,
+            1
+        ],
+        "bottom_exposure_intensity": [
+            60,
+            100,
+            5
+        ],
+        "lifting_speed": [
+            0.5,
+            3.0,
+            0.5
+        ],
+        "exposure_wait": [
+            0.1,
+            2.0,
+            0.1
+        ],
+        "liquid_speed": [
+            0.5,
+            3.0,
+            0.5
+        ],
+        "bottom_exposure_time": [
+            10,
+            30,
+            2
+        ],
+        "print_mode": [
+            0,
+            2,
+            1
+        ]
+    },
+    "timestamp": "20241126_164903",
+    "model_file": "model_20241126_164903.pth",
+    "torch_version": "2.5.1+cpu",
+    "cuda_version": null
+}

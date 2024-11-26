@@ -1,0 +1,19 @@
+{
+    "optimal_results": [
+        {
+            "parameters": {
+                "layer_height": 0.015049500401231356,
+                "exposure_time": 5.924716735013386,
+                "exposure_intensity": 90.78077815333484,
+                "bottom_layers": 5.0,
+                "bottom_exposure_intensity": 99.64947837496288,
+                "lifting_speed": 0.6231777888381275,
+                "exposure_wait": 1.5934583585880984,
+                "liquid_speed": 1.8821315530719218,
+                "bottom_exposure_time": 24.309855008235168,
+                "print_mode": 0.0
+            },
+            "score": 74.84424743652343,
+            "confidence": "高",
+            "component_scores": {
+                "needle_definition": 
