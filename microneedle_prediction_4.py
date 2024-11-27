@@ -176,16 +176,16 @@ quality_score_weights = {
 
 # 定义参数的合理范围
 PARAM_RANGES = {
-    'layer_height': (0.01, 0.1, 0.01),  # 范围：0.01-0.1mm，步长0.01
-    'exposure_time': (1.0, 10.0, 0.5),  # 范围：1-10秒，步长0.5
-    'exposure_intensity': (50, 100, 5),  # 范围：50-100%，步长5
-    'bottom_layers': (3, 8, 1),  # 范围：3-8层，步长1
-    'bottom_exposure_intensity': (60, 100, 5),  # 范围：60-100%，步长5
-    'lifting_speed': (0.5, 3.0, 0.5),  # 范围：0.5-3.0mm/s，步长0.5
-    'exposure_wait': (0.1, 2.0, 0.1),  # 范围：0.1-2.0秒，步长0.1
-    'liquid_speed': (0.5, 3.0, 0.5),  # 范围：0.5-3.0mm/s，步长0.5
-    'bottom_exposure_time': (10, 30, 2),  # 范围：10-30秒，步长2
-    'print_mode': (0, 2, 1)  # 打印方式：0-连续，1-间歇，2-往复
+    'layer_height': (1, 100, 1),              # 范围：1-100μm，步长1μm
+    'exposure_time': (1, 5000, 1),            # 范围：1-5000ms，步长1ms
+    'exposure_intensity': (1, 100, 1),        # 范围：1-100%，步长1%
+    'bottom_layers': (1, 1000, 1),            # 范围：1-1000层，步长1层
+    'bottom_exposure_intensity': (1, 100, 1),  # 范围：1-100%，步长1%
+    'lifting_speed': (1, 1000, 1),            # 范围：1-1000μm/s，步长1μm/s
+    'exposure_wait': (1, 5000, 1),            # 范围：1-5000ms，步长1ms
+    'liquid_speed': (1, 100, 0.5),            # 范围：1-100mm/s，步长0.5mm/s
+    'bottom_exposure_time': (1, 5000, 1),     # 范围：1-5000ms，步长1ms
+    'print_mode': (0, 2, 1)                   # 打印方式：0-连续，1-间歇，2-往复
 }
 
 
@@ -203,15 +203,15 @@ def safe_input(prompt, default=None):
 def get_parameter_unit(param: str) -> str:
     """获取参数的单位"""
     units = {
-        'layer_height': 'mm',
-        'exposure_time': '秒',
+        'layer_height': 'μm',                   # 改为微米单位
+        'exposure_time': 'ms',                  # 改为毫秒单位
         'exposure_intensity': '%',
         'bottom_layers': '层',
         'bottom_exposure_intensity': '%',
-        'lifting_speed': 'mm/s',
-        'exposure_wait': '秒',
+        'lifting_speed': 'μm/s',                # 改为微米每秒
+        'exposure_wait': 'ms',                  # 改为毫秒单位
         'liquid_speed': 'mm/s',
-        'bottom_exposure_time': '秒',
+        'bottom_exposure_time': 'ms',           # 改为毫秒单位
         'print_mode': ''
     }
     return units.get(param, '')
@@ -403,68 +403,181 @@ def generate_synthetic_data(num_samples: int = 1000, param_ranges: dict = None) 
 
 
 def generate_quality_scores(params):
-    """基于输入参数生成质量评分"""
+    """
+    基于输入参数生成微针打印质量评分
+
+    评分维度包括：
+    1. 针尖清晰度 (30%): 评估微针尖端的成型精度和锐利度
+    2. 层间粘结性 (20%): 评估层与层之间的结合强度
+    3. 针尖高度 (20%): 评估微针的实际高度与设计要求的符合度
+    4. 底座厚度 (15%): 评估基底层的厚度均匀性
+    5. 材料固化度 (15%): 评估材料的固化完整性
+
+    Args:
+        params: 包含所有打印参数的字典或数组，参数范围如下：
+            - layer_height: 1-100μm
+            - exposure_time: 1-5000ms
+            - exposure_intensity: 1-100%
+            - bottom_layers: 1-1000层
+            - bottom_exposure_intensity: 1-100%
+            - lifting_speed: 1-1000μm/s
+            - exposure_wait: 1-5000ms
+            - liquid_speed: 1-100mm/s
+            - bottom_exposure_time: 1-5000ms
+            - print_mode: 0(连续)/1(间歇)/2(往复)
+
+    Returns:
+        np.array: 包含5个质量指标评分的数组，每个分值范围0-100
+    """
     try:
-        # 获取打印方式并定义其影响因子
+        # 第一步：确定打印模式对各项指标的影响系数
         print_mode = int(params[input_features.index('print_mode')])
         mode_factors = {
-            0: {'definition': 1.0, 'adhesion': 0.9, 'height': 1.0},  # 连续打印
-            1: {'definition': 0.95, 'adhesion': 1.0, 'height': 0.95},  # 间歇打印
-            2: {'definition': 0.9, 'adhesion': 0.95, 'height': 0.9}  # 往复打印
+            0: {  # 连续打印模式 - 速度快，适合简单结构
+                'definition': 1.0,  # 基准清晰度
+                'adhesion': 0.9,  # 层间结合较弱
+                'height': 1.0  # 基准高度精度
+            },
+            1: {  # 间歇打印模式 - 层间结合好，精度高
+                'definition': 0.95,  # 轻微影响清晰度
+                'adhesion': 1.0,  # 最佳层间结合
+                'height': 0.95  # 轻微影响高度
+            },
+            2: {  # 往复打印模式 - 特殊结构需求
+                'definition': 0.9,  # 显著影响清晰度
+                'adhesion': 0.95,  # 中等层间结合
+                'height': 0.9  # 显著影响高度
+            }
         }
         mode_factor = mode_factors[print_mode]
 
-        # 基础评分生成
+        # 第二步：定义参数归一化函数
+        def normalize(value, min_val, max_val):
+            """将参数值归一化到0-1范围，便于计算"""
+            return (value - min_val) / (max_val - min_val)
+
+        # 第三步：计算各项质量指标评分
+
+        # 1. 针尖清晰度评分计算
+        # 主要受曝光参数和层高的影响，较小的层高和适当的曝光有利于提高清晰度
         needle_def = (
-                             0.4 * (params[input_features.index('exposure_time')] / PARAM_RANGES['exposure_time'][1]) +
-                             0.3 * (params[input_features.index('exposure_intensity')] /
-                                    PARAM_RANGES['exposure_intensity'][1]) +
-                             0.2 * (1 - params[input_features.index('layer_height')] / PARAM_RANGES['layer_height'][
-                         1]) +
+                         # 曝光时间的影响：时间越长，固化越充分
+                             0.4 * normalize(
+                         params[input_features.index('exposure_time')],
+                         PARAM_RANGES['exposure_time'][0],
+                         PARAM_RANGES['exposure_time'][1]
+                     ) +
+                             # 曝光强度的影响：强度越高，固化越彻底
+                             0.3 * normalize(
+                         params[input_features.index('exposure_intensity')],
+                         PARAM_RANGES['exposure_intensity'][0],
+                         PARAM_RANGES['exposure_intensity'][1]
+                     ) +
+                             # 层高的反向影响：层高越小，精度越高
+                             0.2 * (1 - normalize(
+                         params[input_features.index('layer_height')],
+                         PARAM_RANGES['layer_height'][0],  # 1μm
+                         PARAM_RANGES['layer_height'][1]  # 100μm
+                     )) +
+                             # 加入随机因素模拟实际打印的波动
                              0.1 * np.random.normal(0.8, 0.1)
                      ) * 100 * mode_factor['definition']
 
+        # 2. 层间粘结性评分计算
+        # 受层高、机械运动参数和打印模式的影响
         layer_adh = (
-                            0.3 * (1 - params[input_features.index('layer_height')] / PARAM_RANGES['layer_height'][1]) +
-                            0.3 * (1 - params[input_features.index('lifting_speed')] / PARAM_RANGES['lifting_speed'][
-                        1]) +
-                            0.3 * (1 - params[input_features.index('liquid_speed')] / PARAM_RANGES['liquid_speed'][1]) +
+                        # 层高影响：较薄的层有利于层间结合
+                            0.3 * (1 - normalize(
+                        params[input_features.index('layer_height')],
+                        PARAM_RANGES['layer_height'][0],
+                        PARAM_RANGES['layer_height'][1]
+                    )) +
+                            # 抬升速度影响：速度越慢，分离越平稳
+                            0.3 * (1 - normalize(
+                        params[input_features.index('lifting_speed')],
+                        PARAM_RANGES['lifting_speed'][0],
+                        PARAM_RANGES['lifting_speed'][1]
+                    )) +
+                            # 入液速度影响：速度需要适中
+                            0.3 * (1 - abs(normalize(
+                        params[input_features.index('liquid_speed')],
+                        PARAM_RANGES['liquid_speed'][0],
+                        PARAM_RANGES['liquid_speed'][1]
+                    ) - 0.5) * 2) +
+                            # 随机因素
                             0.1 * np.random.normal(0.8, 0.1)
                     ) * 100 * mode_factor['adhesion']
 
+        # 3. 针尖高度评分计算
+        # 主要考虑层高精度和底层参数的影响
         needle_height = (
-                                0.4 * (1 - params[input_features.index('layer_height')] / PARAM_RANGES['layer_height'][
-                            1]) +
-                                0.3 * (params[input_features.index('bottom_layers')] / PARAM_RANGES['bottom_layers'][
-                            1]) +
+                            # 层高精度影响
+                                0.4 * (1 - normalize(
+                            params[input_features.index('layer_height')],
+                            PARAM_RANGES['layer_height'][0],
+                            PARAM_RANGES['layer_height'][1]
+                        )) +
+                                # 底层结构的影响
+                                0.3 * normalize(
+                            params[input_features.index('bottom_layers')],
+                            PARAM_RANGES['bottom_layers'][0],
+                            PARAM_RANGES['bottom_layers'][1]
+                        ) +
+                                # 随机因素
                                 0.3 * np.random.normal(0.8, 0.1)
                         ) * 100 * mode_factor['height']
 
+        # 4. 底座厚度评分计算
+        # 主要由底层曝光参数决定
         base_thick = (
-                             0.4 * (params[input_features.index('bottom_exposure_time')] /
-                                    PARAM_RANGES['bottom_exposure_time'][1]) +
-                             0.4 * (params[input_features.index('bottom_exposure_intensity')] /
-                                    PARAM_RANGES['bottom_exposure_intensity'][1]) +
+                         # 底层曝光时间影响
+                             0.4 * normalize(
+                         params[input_features.index('bottom_exposure_time')],
+                         PARAM_RANGES['bottom_exposure_time'][0],
+                         PARAM_RANGES['bottom_exposure_time'][1]
+                     ) +
+                             # 底层曝光强度影响
+                             0.4 * normalize(
+                         params[input_features.index('bottom_exposure_intensity')],
+                         PARAM_RANGES['bottom_exposure_intensity'][0],
+                         PARAM_RANGES['bottom_exposure_intensity'][1]
+                     ) +
+                             # 随机因素
                              0.2 * np.random.normal(0.8, 0.1)
                      ) * 100
 
+        # 5. 材料固化度评分计算
+        # 综合考虑曝光参数和等待时间
         material_cure = (
-                                0.3 * (
-                                    params[input_features.index('exposure_time')] / PARAM_RANGES['exposure_time'][1]) +
-                                0.3 * (params[input_features.index('exposure_intensity')] /
-                                       PARAM_RANGES['exposure_intensity'][1]) +
-                                0.2 * (params[input_features.index('exposure_wait')] / PARAM_RANGES['exposure_wait'][
-                            1]) +
+                            # 曝光时间影响
+                                0.3 * normalize(
+                            params[input_features.index('exposure_time')],
+                            PARAM_RANGES['exposure_time'][0],
+                            PARAM_RANGES['exposure_time'][1]
+                        ) +
+                                # 曝光强度影响
+                                0.3 * normalize(
+                            params[input_features.index('exposure_intensity')],
+                            PARAM_RANGES['exposure_intensity'][0],
+                            PARAM_RANGES['exposure_intensity'][1]
+                        ) +
+                                # 等待时间影响
+                                0.2 * normalize(
+                            params[input_features.index('exposure_wait')],
+                            PARAM_RANGES['exposure_wait'][0],
+                            PARAM_RANGES['exposure_wait'][1]
+                        ) +
+                                # 随机因素
                                 0.2 * np.random.normal(0.8, 0.1)
                         ) * 100
 
-        # 限制所有分数在0-100范围内
+        # 第四步：确保所有评分都在合理范围内（0-100）
         scores = [
-            np.clip(needle_def, 0, 100),
-            np.clip(layer_adh, 0, 100),
-            np.clip(needle_height, 0, 100),
-            np.clip(base_thick, 0, 100),
-            np.clip(material_cure, 0, 100)
+            np.clip(needle_def, 0, 100),  # 针尖清晰度
+            np.clip(layer_adh, 0, 100),  # 层间粘结性
+            np.clip(needle_height, 0, 100),  # 针尖高度
+            np.clip(base_thick, 0, 100),  # 底座厚度
+            np.clip(material_cure, 0, 100)  # 材料固化度
         ]
 
         return np.array(scores)
@@ -472,7 +585,7 @@ def generate_quality_scores(params):
     except Exception as e:
         logger.error(f"生成质量评分时出错: {str(e)}")
         print(f"生成质量评分时出错: {str(e)}")
-        # 返回零分评分，而不是None
+        # 发生错误时返回零分
         return np.zeros(len(quality_score_components))
 
 
